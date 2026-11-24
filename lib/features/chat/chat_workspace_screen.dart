@@ -28,7 +28,8 @@ class ChatWorkspaceScreen extends StatefulWidget {
   State<ChatWorkspaceScreen> createState() => _ChatWorkspaceScreenState();
 }
 
-class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
+class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen>
+    with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final TextEditingController _promptCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
@@ -38,10 +39,13 @@ class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
   late List<ChatThread> _threads;
   String? _activeThreadId;
   bool _sending = false;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _scrollCtrl.addListener(_onScrollChanged);
     _threads = List<ChatThread>.from(widget.initialThreads);
     _activeThreadId = widget.initialActiveThreadId;
     if (_activeThreadId == null && _threads.isNotEmpty) {
@@ -51,10 +55,32 @@ class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _scrollCtrl.removeListener(_onScrollChanged);
     _promptCtrl.dispose();
     _scrollCtrl.dispose();
     _promptFocus.dispose();
     super.dispose();
+  }
+
+  void _onScrollChanged() {
+    if (!_scrollCtrl.hasClients) return;
+    final show = _scrollCtrl.offset > 140;
+    if (show != _showScrollToBottom && mounted) {
+      setState(() => _showScrollToBottom = show);
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollCtrl.hasClients) return;
+      if (_scrollCtrl.offset < 120) {
+        _scrollToBottom();
+      }
+    });
   }
 
   ChatThread? get _activeThread {
@@ -356,8 +382,8 @@ class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollCtrl.hasClients) return;
       _scrollCtrl.animateTo(
-        _scrollCtrl.position.maxScrollExtent + 120,
-        duration: const Duration(milliseconds: 260),
+        0.0,
+        duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
       );
     });
@@ -371,6 +397,7 @@ class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
 
     return Scaffold(
       key: _scaffoldKey,
+      resizeToAvoidBottomInset: true,
       backgroundColor: p.bg,
       drawer: _buildSidebarDrawer(p),
       appBar: _buildTopBar(p),
@@ -378,33 +405,72 @@ class _ChatWorkspaceScreenState extends State<ChatWorkspaceScreen> {
         children: [
           if (!widget.config.isActiveProviderReady) _buildConfigBanner(p),
           Expanded(
-            child: messages.isEmpty
+            child: messages.isEmpty && !_sending
                 ? _buildEmptyStateWelcome(p)
-                : ListView.builder(
-                    controller: _scrollCtrl,
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-                    itemCount: messages.length + (_sending ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index >= messages.length) {
-                        return _buildTypingIndicator(p);
-                      }
-                      final msg = messages[index];
-                      return _MessageBubbleItem(
-                        message: msg,
-                        palette: p,
-                        visualStyle: widget.config.visualStyle,
-                        onOpenArtifact: _openArtifactModal,
-                        onTapSuggestion: (s) => _sendMessage(s),
-                        onRetry: msg.isError && index > 0
-                            ? () {
-                                final prevUser = messages[index - 1];
-                                if (prevUser.role == MessageRole.user) {
-                                  _sendMessage(prevUser.content);
-                                }
-                              }
-                            : null,
-                      );
-                    },
+                : Stack(
+                    children: [
+                      Align(
+                        alignment: Alignment.topCenter,
+                        child: ListView.builder(
+                          controller: _scrollCtrl,
+                          reverse: true,
+                          shrinkWrap: true,
+                          keyboardDismissBehavior:
+                              ScrollViewKeyboardDismissBehavior.onDrag,
+                          physics: const AlwaysScrollableScrollPhysics(
+                            parent: BouncingScrollPhysics(),
+                          ),
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+                          itemCount: messages.length + (_sending ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            final typingOffset = _sending ? 1 : 0;
+                            if (typingOffset == 1 && index == 0) {
+                              return _buildTypingIndicator(p);
+                            }
+                            final msgIdx =
+                                messages.length - 1 - (index - typingOffset);
+                            final msg = messages[msgIdx];
+                            return _MessageBubbleItem(
+                              message: msg,
+                              palette: p,
+                              visualStyle: widget.config.visualStyle,
+                              onOpenArtifact: _openArtifactModal,
+                              onTapSuggestion: (s) => _sendMessage(s),
+                              onRetry: msg.isError && msgIdx > 0
+                                  ? () {
+                                      final prevUser = messages[msgIdx - 1];
+                                      if (prevUser.role == MessageRole.user) {
+                                        _sendMessage(prevUser.content);
+                                      }
+                                    }
+                                  : null,
+                            );
+                          },
+                        ),
+                      ),
+                      if (_showScrollToBottom)
+                        Positioned(
+                          right: 16,
+                          bottom: 12,
+                          child: Material(
+                            color: p.surface,
+                            elevation: 4,
+                            shape: const CircleBorder(),
+                            child: InkWell(
+                              customBorder: const CircleBorder(),
+                              onTap: _scrollToBottom,
+                              child: Padding(
+                                padding: const EdgeInsets.all(9),
+                                child: Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  color: p.textPrimary,
+                                  size: 24,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
           ),
           _buildBottomComposer(p),

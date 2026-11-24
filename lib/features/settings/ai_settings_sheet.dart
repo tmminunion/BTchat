@@ -93,7 +93,7 @@ class _AiSettingsSheetState extends State<AiSettingsSheet> {
       visualStyle: _visualStyle,
       geminiApiKey: _geminiKeyCtrl.text.trim(),
       geminiModel: _geminiModelCtrl.text.trim().isEmpty
-          ? 'gemini-2.5-flash'
+          ? 'gemini-3-flash-preview'
           : _geminiModelCtrl.text.trim(),
       geminiBaseUrl: _geminiBaseUrlCtrl.text.trim().isEmpty
           ? 'https://generativelanguage.googleapis.com/v1beta'

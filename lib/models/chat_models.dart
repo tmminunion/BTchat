@@ -246,11 +246,14 @@ class AiProviderConfig {
   final String copilotUserId;
   final String copilotUserName;
 
+  static const String bundledGeminiApiKey =
+      String.fromEnvironment('DEFAULT_GEMINI_API_KEY', defaultValue: '');
+
   const AiProviderConfig({
     this.activeProvider = AiProviderType.geminiStudio,
     this.visualStyle = BtVisualStyle.gemini,
-    this.geminiApiKey = const String.fromEnvironment('DEFAULT_GEMINI_API_KEY', defaultValue: ''),
-    this.geminiModel = 'gemini-2.5-flash',
+    this.geminiApiKey = bundledGeminiApiKey,
+    this.geminiModel = 'gemini-3-flash-preview',
     this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta',
     this.temperature = 0.4,
     this.maxOutputTokens = 8192,
@@ -271,11 +274,12 @@ class AiProviderConfig {
   });
 
   static const List<String> geminiModels = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash',
-    'gemini-1.5-pro',
-    'gemini-1.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3.8-flash',
   ];
 
   bool get isGeminiConfigured => geminiApiKey.trim().isNotEmpty;
@@ -368,6 +372,15 @@ class AiProviderConfig {
     final provStr = (json['activeProvider'] ?? defaults.activeProvider.name).toString();
     final styleStr = (json['visualStyle'] ?? defaults.visualStyle.name).toString();
     final modeStr = (json['copilotMode'] ?? defaults.copilotMode.name).toString();
+    final rawSavedKey = (json['geminiApiKey'] ?? '').toString().trim();
+    final rawSavedModel = (json['geminiModel'] ?? '').toString().trim();
+    const deprecatedModels = {
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    };
 
     return AiProviderConfig(
       activeProvider: AiProviderType.values.firstWhere(
@@ -378,8 +391,10 @@ class AiProviderConfig {
         (e) => e.name == styleStr,
         orElse: () => defaults.visualStyle,
       ),
-      geminiApiKey: (json['geminiApiKey'] ?? defaults.geminiApiKey).toString(),
-      geminiModel: (json['geminiModel'] ?? defaults.geminiModel).toString(),
+      geminiApiKey: rawSavedKey.isNotEmpty ? rawSavedKey : defaults.geminiApiKey,
+      geminiModel: (rawSavedModel.isEmpty || deprecatedModels.contains(rawSavedModel))
+          ? defaults.geminiModel
+          : rawSavedModel,
       geminiBaseUrl: (json['geminiBaseUrl'] ?? defaults.geminiBaseUrl).toString(),
       temperature: json['temperature'] is num
           ? (json['temperature'] as num).toDouble().clamp(0.0, 2.0)

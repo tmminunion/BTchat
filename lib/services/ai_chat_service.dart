@@ -86,8 +86,8 @@ class AiChatService {
 
     final sw = Stopwatch()..start();
     final baseUrl = config.geminiBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final model = config.geminiModel.trim().isEmpty ? 'gemini-2.5-flash' : config.geminiModel.trim();
-    final uri = Uri.parse('$baseUrl/models/$model:generateContent?key=$apiKey');
+    final primaryModel =
+        config.geminiModel.trim().isEmpty ? 'gemini-3-flash-preview' : config.geminiModel.trim();
 
     final contents = <Map<String, dynamic>>[];
     final recentHistory = history.where((m) => !m.isError && m.content.trim().isNotEmpty).toList();
@@ -127,57 +127,83 @@ class AiChatService {
       };
     }
 
-    final response = await _client
-        .post(
-          uri,
-          headers: const {'Content-Type': 'application/json; charset=utf-8'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 60));
+    final candidateModels = <String>[
+      primaryModel,
+      for (final m in const [
+        'gemini-3-flash-preview',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-flash-lite-latest',
+      ])
+        if (m != primaryModel) m,
+    ];
 
-    sw.stop();
+    String lastErrorMsg = 'Gagal menghubungi Gemini API';
 
-    Map<String, dynamic> bodyMap = {};
-    try {
-      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is Map<String, dynamic>) {
-        bodyMap = decoded;
+    for (var idx = 0; idx < candidateModels.length; idx++) {
+      final model = candidateModels[idx];
+      final uri = Uri.parse('$baseUrl/models/$model:generateContent?key=$apiKey');
+      final response = await _client
+          .post(
+            uri,
+            headers: const {'Content-Type': 'application/json; charset=utf-8'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      Map<String, dynamic> bodyMap = {};
+      try {
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is Map<String, dynamic>) {
+          bodyMap = decoded;
+        }
+      } catch (_) {}
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final errObj = bodyMap['error'];
+        lastErrorMsg = errObj is Map
+            ? (errObj['message'] ?? 'HTTP ${response.statusCode}').toString()
+            : 'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Gagal menghubungi Gemini API'}';
+
+        // Auto-fallback jika model deprecated (404), kuota model penuh (429), atau high demand (503)
+        final shouldFallback =
+            response.statusCode == 404 || response.statusCode == 429 || response.statusCode == 503;
+        if (shouldFallback && idx < candidateModels.length - 1) {
+          continue;
+        }
+        sw.stop();
+        throw Exception('Gemini API Error ($model): $lastErrorMsg');
       }
-    } catch (_) {}
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final errObj = bodyMap['error'];
-      final errMsg = errObj is Map
-          ? (errObj['message'] ?? 'HTTP ${response.statusCode}').toString()
-          : 'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Gagal menghubungi Gemini API'}';
-      throw Exception('Gemini API Error: $errMsg');
-    }
-
-    final candidates = bodyMap['candidates'];
-    if (candidates is List && candidates.isNotEmpty) {
-      final first = candidates.first;
-      if (first is Map) {
-        final content = first['content'];
-        if (content is Map && content['parts'] is List) {
-          final parts = content['parts'] as List;
-          final buffer = StringBuffer();
-          for (final p in parts) {
-            if (p is Map && p['text'] != null) {
-              buffer.write(p['text'].toString());
+      final candidates = bodyMap['candidates'];
+      if (candidates is List && candidates.isNotEmpty) {
+        final first = candidates.first;
+        if (first is Map) {
+          final content = first['content'];
+          if (content is Map && content['parts'] is List) {
+            final parts = content['parts'] as List;
+            final buffer = StringBuffer();
+            for (final p in parts) {
+              if (p is Map && p['text'] != null) {
+                buffer.write(p['text'].toString());
+              }
             }
-          }
-          final text = buffer.toString().trim();
-          if (text.isNotEmpty) {
-            return AiReplyResult(
-              text: text,
-              latencyMs: sw.elapsedMilliseconds,
-            );
+            final text = buffer.toString().trim();
+            if (text.isNotEmpty) {
+              sw.stop();
+              return AiReplyResult(
+                text: text,
+                latencyMs: sw.elapsedMilliseconds,
+              );
+            }
           }
         }
       }
     }
 
-    throw Exception('Respons Gemini kosong atau diblokir oleh filter keamanan.');
+    sw.stop();
+    throw Exception('Respons Gemini kosong atau diblokir oleh filter keamanan ($lastErrorMsg).');
   }
 
   Future<AiReplyResult> _sendCopilotMessage({

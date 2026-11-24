@@ -8,7 +8,7 @@ void main() {
       activeProvider: AiProviderType.copilotStudio,
       visualStyle: BtVisualStyle.claude,
       geminiApiKey: 'AIzaTestKey123',
-      geminiModel: 'gemini-2.5-pro',
+      geminiModel: 'gemini-3.6-flash',
       copilotMode: CopilotConnectionMode.directLineSecret,
       copilotDirectLineSecret: 'dl_secret_xyz',
       copilotBotName: 'Bungtemin Copilot Dev',
@@ -20,7 +20,7 @@ void main() {
     expect(parsed.activeProvider, AiProviderType.copilotStudio);
     expect(parsed.visualStyle, BtVisualStyle.claude);
     expect(parsed.geminiApiKey, 'AIzaTestKey123');
-    expect(parsed.geminiModel, 'gemini-2.5-pro');
+    expect(parsed.geminiModel, 'gemini-3.6-flash');
     expect(parsed.copilotDirectLineSecret, 'dl_secret_xyz');
     expect(parsed.copilotBotName, 'Bungtemin Copilot Dev');
     expect(parsed.isGeminiConfigured, isTrue);

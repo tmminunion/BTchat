@@ -218,7 +218,7 @@ class _BtSplashScreenState extends State<BtSplashScreen>
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
                             minHeight: 4,
-                            backgroundColor: p.bgSecondary,
+                            backgroundColor: p.surface,
                             color: p.accent,
                           ),
                         ),

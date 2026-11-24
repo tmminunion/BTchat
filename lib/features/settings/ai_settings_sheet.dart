@@ -480,7 +480,7 @@ class _AiSettingsSheetState extends State<AiSettingsSheet> {
             controller: _sysInstructionCtrl,
             maxLines: 3,
             style: TextStyle(color: p.textPrimary, fontSize: 13),
-            decoration: InputDecoration(
+            decoration: const InputDecoration(
               labelText: 'System Instruction (Persona & Aturan Developer AI)',
               hintText: 'Instruksi sistem untuk mengarahkan gaya jawaban AI...',
               alignLabelWithHint: true,

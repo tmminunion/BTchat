@@ -262,7 +262,7 @@ class AiProviderConfig {
     this.systemInstruction =
         'Kamu adalah BTchat AI Assistant, asisten AI Software Engineering & Enterprise Automation untuk developer Bungtemin. '
         'Berikan jawaban yang terstruktur, akurat, menggunakan Markdown yang rapi, dan sertakan kode siap pakai dengan best-practice.',
-    this.copilotMode = CopilotConnectionMode.customWebhook,
+    this.copilotMode = CopilotConnectionMode.directLineSecret,
     this.copilotDirectLineSecret =
         const String.fromEnvironment('DEFAULT_COPILOT_SECRET', defaultValue: ''),
     this.copilotTokenEndpoint =
@@ -375,6 +375,18 @@ class AiProviderConfig {
     final modeStr = (json['copilotMode'] ?? defaults.copilotMode.name).toString();
     final rawSavedKey = (json['geminiApiKey'] ?? '').toString().trim();
     final rawSavedModel = (json['geminiModel'] ?? '').toString().trim();
+    final rawSavedDlSecret = (json['copilotDirectLineSecret'] ?? '').toString().trim();
+    final resolvedDlSecret =
+        rawSavedDlSecret.isNotEmpty ? rawSavedDlSecret : defaults.copilotDirectLineSecret;
+    var parsedCopilotMode = CopilotConnectionMode.values.firstWhere(
+      (e) => e.name == modeStr,
+      orElse: () => defaults.copilotMode,
+    );
+    if (defaults.copilotDirectLineSecret.isNotEmpty &&
+        rawSavedDlSecret.isEmpty &&
+        parsedCopilotMode == CopilotConnectionMode.customWebhook) {
+      parsedCopilotMode = CopilotConnectionMode.directLineSecret;
+    }
     const deprecatedModels = {
       'gemini-2.5-flash',
       'gemini-2.5-flash-lite',
@@ -404,12 +416,8 @@ class AiProviderConfig {
           ? (json['maxOutputTokens'] as num).toInt().clamp(256, 65536)
           : defaults.maxOutputTokens,
       systemInstruction: (json['systemInstruction'] ?? defaults.systemInstruction).toString(),
-      copilotMode: CopilotConnectionMode.values.firstWhere(
-        (e) => e.name == modeStr,
-        orElse: () => defaults.copilotMode,
-      ),
-      copilotDirectLineSecret:
-          (json['copilotDirectLineSecret'] ?? defaults.copilotDirectLineSecret).toString(),
+      copilotMode: parsedCopilotMode,
+      copilotDirectLineSecret: resolvedDlSecret,
       copilotTokenEndpoint:
           (json['copilotTokenEndpoint'] ?? defaults.copilotTokenEndpoint).toString(),
       copilotWebhookUrl: ((json['copilotWebhookUrl'] ?? '').toString().trim().isNotEmpty)

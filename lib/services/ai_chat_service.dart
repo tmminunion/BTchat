@@ -267,58 +267,93 @@ class AiChatService {
       'Accept': 'application/json',
     };
 
-    var convId = (existingConversationId ?? tokenConversationId ?? '').trim();
-    var watermark = existingWatermark;
-
-    if (convId.isEmpty) {
-      final startResp = await _client
-          .post(Uri.parse('$dlBase/conversations'), headers: authHeaders)
-          .timeout(const Duration(seconds: 25));
-
-      if (startResp.statusCode < 200 || startResp.statusCode >= 300) {
-        throw Exception(
-          'Gagal memulai sesi Direct Line Copilot Studio (HTTP ${startResp.statusCode}). Pastikan Direct Line Secret valid.',
-        );
-      }
-      final startJson = jsonDecode(utf8.decode(startResp.bodyBytes));
-      if (startJson is Map) {
-        convId = (startJson['conversationId'] ?? '').toString();
-        final refreshedToken = (startJson['token'] ?? '').toString();
-        if (refreshedToken.isNotEmpty) {
-          authHeaders['Authorization'] = 'Bearer $refreshedToken';
-        }
-      }
-    }
-
-    if (convId.isEmpty) {
-      throw Exception('Copilot Studio tidak mengembalikan conversationId.');
-    }
-
     final userId = config.copilotUserId.trim().isEmpty ? 'btchat-user' : config.copilotUserId.trim();
     final userName =
         config.copilotUserName.trim().isEmpty ? 'Developer' : config.copilotUserName.trim();
 
-    final activityPayload = {
-      'type': 'message',
-      'from': {
-        'id': userId,
-        'name': userName,
-      },
-      'text': userPrompt,
-      'locale': 'id-ID',
-    };
+    var convId = (existingConversationId ?? tokenConversationId ?? '').trim();
+    var watermark = existingWatermark;
+    http.Response? postActResp;
 
-    final postActResp = await _client
-        .post(
-          Uri.parse('$dlBase/conversations/$convId/activities'),
-          headers: authHeaders,
-          body: jsonEncode(activityPayload),
-        )
-        .timeout(const Duration(seconds: 25));
+    for (var retry = 0; retry < 2; retry++) {
+      final isNewConv = convId.isEmpty;
+      if (isNewConv) {
+        final startResp = await _client
+            .post(
+              Uri.parse('$dlBase/conversations'),
+              headers: authHeaders,
+              body: jsonEncode({
+                'user': {'id': userId, 'name': userName},
+              }),
+            )
+            .timeout(const Duration(seconds: 25));
 
-    if (postActResp.statusCode < 200 || postActResp.statusCode >= 300) {
+        if (startResp.statusCode < 200 || startResp.statusCode >= 300) {
+          throw Exception(
+            'Gagal memulai sesi Direct Line Copilot Studio (HTTP ${startResp.statusCode}). Pastikan Direct Line Secret valid.',
+          );
+        }
+        final startJson = jsonDecode(utf8.decode(startResp.bodyBytes));
+        if (startJson is Map) {
+          convId = (startJson['conversationId'] ?? '').toString();
+          final refreshedToken = (startJson['token'] ?? '').toString();
+          if (refreshedToken.isNotEmpty) {
+            authHeaders['Authorization'] = 'Bearer $refreshedToken';
+          }
+        }
+        watermark = null;
+      }
+
+      if (convId.isEmpty) {
+        throw Exception('Copilot Studio tidak mengembalikan conversationId.');
+      }
+
+      var outboundText = userPrompt;
+      if (isNewConv) {
+        final cleanHist = history.where((m) => !m.isError && m.content.trim().isNotEmpty).toList();
+        final startIdx = cleanHist.length > 4 ? cleanHist.length - 4 : 0;
+        final histLines = <String>[];
+        for (var i = startIdx; i < cleanHist.length; i++) {
+          final m = cleanHist[i];
+          final lbl = m.role == MessageRole.user ? userName : config.copilotBotName;
+          final snip = m.content.trim();
+          histLines.add('$lbl: ${snip.length > 300 ? '${snip.substring(0, 300)}...' : snip}');
+        }
+        final tag = '[Info Pengirim: Nama saya $userName (ID: $userId)]';
+        outboundText = histLines.isNotEmpty
+            ? '$tag\n[Lanjutan percakapan sebelumnya]\n${histLines.join('\n')}\n\n[Pesan terbaru]\n$userPrompt'
+            : '$tag\n$userPrompt';
+      }
+
+      final activityPayload = {
+        'type': 'message',
+        'from': {
+          'id': userId,
+          'name': userName,
+        },
+        'text': outboundText,
+        'locale': 'id-ID',
+      };
+
+      postActResp = await _client
+          .post(
+            Uri.parse('$dlBase/conversations/$convId/activities'),
+            headers: authHeaders,
+            body: jsonEncode(activityPayload),
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if ((postActResp.statusCode == 403 || postActResp.statusCode == 404) && retry == 0) {
+        convId = '';
+        watermark = null;
+        continue;
+      }
+      break;
+    }
+
+    if (postActResp == null || postActResp.statusCode < 200 || postActResp.statusCode >= 300) {
       throw Exception(
-        'Gagal mengirim pesan ke Copilot Studio (HTTP ${postActResp.statusCode}).',
+        'Gagal mengirim pesan ke Copilot Studio (HTTP ${postActResp?.statusCode ?? 0}).',
       );
     }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'core/chat_theme.dart';
 import 'features/chat/chat_workspace_screen.dart';
+import 'features/splash/bt_splash_screen.dart';
 import 'models/chat_models.dart';
 import 'services/chat_storage_service.dart';
 
@@ -30,14 +31,20 @@ class _BtChatAppState extends State<BtChatApp> {
   }
 
   Future<void> _bootstrap() async {
+    final minSplash = Future<void>.delayed(const Duration(milliseconds: 1900));
     final cfg = await _storage.loadConfig();
     final threads = await _storage.loadThreads();
     final activeId = await _storage.loadActiveThreadId();
+    if (mounted) {
+      setState(() {
+        _config = cfg;
+        _threads = threads;
+        _activeThreadId = activeId;
+      });
+    }
+    await minSplash;
     if (!mounted) return;
     setState(() {
-      _config = cfg;
-      _threads = threads;
-      _activeThreadId = activeId;
       _ready = true;
     });
   }
@@ -59,26 +66,29 @@ class _BtChatAppState extends State<BtChatApp> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = BtThemePalette.of(_config.visualStyle);
     return MaterialApp(
       title: 'BTchat',
       debugShowCheckedModeBanner: false,
       theme: buildBtChatTheme(_config.visualStyle),
-      home: !_ready
-          ? Scaffold(
-              backgroundColor: palette.bg,
-              body: Center(
-                child: CircularProgressIndicator(color: palette.accent),
+      home: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 420),
+        child: !_ready
+            ? BtSplashScreen(
+                key: const ValueKey('btchat_splash'),
+                visualStyle: _config.visualStyle,
+                activeProvider: _config.activeProvider,
+                activeModel: _config.activeModelDisplay,
+              )
+            : ChatWorkspaceScreen(
+                key: const ValueKey('btchat_workspace'),
+                config: _config,
+                initialThreads: _threads,
+                initialActiveThreadId: _activeThreadId,
+                onConfigChanged: _handleConfigChanged,
+                onThreadsChanged: _handleThreadsChanged,
+                onActiveThreadChanged: _handleActiveThreadChanged,
               ),
-            )
-          : ChatWorkspaceScreen(
-              config: _config,
-              initialThreads: _threads,
-              initialActiveThreadId: _activeThreadId,
-              onConfigChanged: _handleConfigChanged,
-              onThreadsChanged: _handleThreadsChanged,
-              onActiveThreadChanged: _handleActiveThreadChanged,
-            ),
+      ),
     );
   }
 }

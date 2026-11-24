@@ -452,22 +452,41 @@ class AiChatService {
       }
     }
 
+    // Inject multi-turn context if workflow is stateless (no conversationId)
+    var messageText = userPrompt;
+    final cleanHistory = history.where((m) => !m.isError && m.content.trim().isNotEmpty).toList();
+    if ((existingConversationId ?? '').trim().isEmpty && cleanHistory.isNotEmpty) {
+      final startIdx = cleanHistory.length > 6 ? cleanHistory.length - 6 : 0;
+      final histLines = <String>[];
+      for (var i = startIdx; i < cleanHistory.length; i++) {
+        final m = cleanHistory[i];
+        final roleLabel = m.role == MessageRole.user ? config.copilotUserName : config.copilotBotName;
+        final snippet = m.content.trim();
+        final clipped = snippet.length > 500 ? '${snippet.substring(0, 500)}...' : snippet;
+        histLines.add('$roleLabel: $clipped');
+      }
+      if (histLines.isNotEmpty) {
+        messageText = '[Riwayat percakapan sebelumnya]\n'
+            '${histLines.join('\n')}\n\n'
+            '[Pesan terbaru dari ${config.copilotUserName}]\n'
+            '$userPrompt';
+      }
+    }
+
     final payload = {
-      'message': userPrompt,
+      'message': messageText,
       'prompt': userPrompt,
-      'text': userPrompt,
+      'text': messageText,
       'conversationId': existingConversationId ?? '',
+      'noreg': config.copilotUserId,
+      'nama': config.copilotUserName,
       'userId': config.copilotUserId,
       'userName': config.copilotUserName,
-      'history': history
-          .where((m) => !m.isError)
-          .map((m) => {'role': m.role.name, 'content': m.content})
-          .toList(),
     };
 
     final resp = await _client
         .post(Uri.parse(url), headers: headers, body: jsonEncode(payload))
-        .timeout(const Duration(seconds: 60));
+        .timeout(const Duration(seconds: 120));
 
     sw.stop();
 
@@ -476,38 +495,166 @@ class AiChatService {
     }
 
     final rawBody = utf8.decode(resp.bodyBytes).trim();
-    try {
-      final decoded = jsonDecode(rawBody);
-      if (decoded is Map) {
-        final reply = (decoded['reply'] ??
-                decoded['text'] ??
-                decoded['message'] ??
-                decoded['output'] ??
-                decoded['answer'] ??
-                decoded['response'] ??
-                '')
-            .toString()
-            .trim();
-        final convId = decoded['conversationId']?.toString() ?? existingConversationId;
-        if (reply.isNotEmpty) {
-          return AiReplyResult(
-            text: reply,
-            latencyMs: sw.elapsedMilliseconds,
-            copilotConversationId: convId,
-          );
-        }
-      }
-    } catch (_) {}
-
-    if (rawBody.isNotEmpty) {
+    final parsed = parseWebhookResponse(rawBody, fallbackConvId: existingConversationId);
+    if (parsed.reply.isNotEmpty) {
       return AiReplyResult(
-        text: rawBody,
+        text: parsed.reply,
         latencyMs: sw.elapsedMilliseconds,
-        copilotConversationId: existingConversationId,
+        copilotConversationId: parsed.conversationId,
       );
     }
 
     throw Exception('Respons Webhook Copilot kosong.');
+  }
+
+  /// Parses Power Automate / Copilot Studio webhook JSON even when the server
+  /// emits unescaped literal newlines or quotes inside the "reply" string.
+  static ({String reply, String? conversationId}) parseWebhookResponse(
+    String rawBody, {
+    String? fallbackConvId,
+  }) {
+    final trimmed = rawBody.trim();
+    if (trimmed.isEmpty) {
+      return (reply: '', conversationId: fallbackConvId);
+    }
+
+    // 1. Standard JSON decode
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map) {
+        final reply = _pickReplyFromMap(decoded);
+        final convId = _pickConvIdFromMap(decoded) ?? fallbackConvId;
+        if (reply.isNotEmpty) {
+          return (reply: reply, conversationId: convId);
+        }
+      }
+    } catch (_) {}
+
+    // 2. Sanitize raw control characters (literal \r, \n, \t) inside JSON strings
+    final sanitized = _escapeControlCharsInsideJsonStrings(trimmed);
+    if (sanitized != trimmed) {
+      try {
+        final decoded = jsonDecode(sanitized);
+        if (decoded is Map) {
+          final reply = _pickReplyFromMap(decoded);
+          final convId = _pickConvIdFromMap(decoded) ?? fallbackConvId;
+          if (reply.isNotEmpty) {
+            return (reply: reply, conversationId: convId);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Resilient field extractor for Power Automate malformed JSON
+    //    (e.g. unescaped inner quotes like "Update Aplikasi Tersedia." + raw newlines)
+    final keyMatch = RegExp(
+      r'"(?:reply|text|message|output|answer|response)"\s*:\s*"',
+      caseSensitive: false,
+    ).firstMatch(trimmed);
+    if (keyMatch != null) {
+      final start = keyMatch.end;
+      var end = -1;
+
+      final nextKeyMatch = RegExp(
+        r'"\s*,\s*"[a-zA-Z0-9_]+"|\s*"\s*\n?\s*\}',
+      ).allMatches(trimmed, start);
+      if (nextKeyMatch.isNotEmpty) {
+        // Pick the last structural boundary before the closing object or next JSON field
+        final convBoundary = RegExp(
+          r'"\s*,\s*"conversationId"\s*:',
+          caseSensitive: false,
+        ).firstMatch(trimmed.substring(start));
+        if (convBoundary != null) {
+          end = start + convBoundary.start;
+        } else {
+          end = nextKeyMatch.last.start;
+        }
+      }
+
+      if (end > start) {
+        var extracted = trimmed.substring(start, end);
+        extracted = extracted
+            .replaceAll(r'\r\n', '\n')
+            .replaceAll(r'\n', '\n')
+            .replaceAll(r'\t', '\t')
+            .replaceAll(r'\"', '"')
+            .replaceAll(r'\\', '\\')
+            .trim();
+
+        String? convId = fallbackConvId;
+        final convMatch = RegExp(
+          r'"conversationId"\s*:\s*"([^"]*)"',
+          caseSensitive: false,
+        ).firstMatch(trimmed);
+        if (convMatch != null) {
+          final c = (convMatch.group(1) ?? '').trim();
+          if (c.isNotEmpty) convId = c;
+        }
+
+        if (extracted.isNotEmpty) {
+          return (reply: extracted, conversationId: convId);
+        }
+      }
+    }
+
+    return (reply: trimmed, conversationId: fallbackConvId);
+  }
+
+  static String _pickReplyFromMap(Map decoded) {
+    return (decoded['reply'] ??
+            decoded['text'] ??
+            decoded['message'] ??
+            decoded['output'] ??
+            decoded['answer'] ??
+            decoded['response'] ??
+            '')
+        .toString()
+        .trim();
+  }
+
+  static String? _pickConvIdFromMap(Map decoded) {
+    final c = (decoded['conversationId'] ?? '').toString().trim();
+    return c.isEmpty ? null : c;
+  }
+
+  static String _escapeControlCharsInsideJsonStrings(String input) {
+    final buf = StringBuffer();
+    var inString = false;
+    var escaped = false;
+    for (var i = 0; i < input.length; i++) {
+      final ch = input[i];
+      if (escaped) {
+        buf.write(ch);
+        escaped = false;
+        continue;
+      }
+      if (ch == '\\') {
+        buf.write(ch);
+        escaped = true;
+        continue;
+      }
+      if (ch == '"') {
+        inString = !inString;
+        buf.write(ch);
+        continue;
+      }
+      if (inString) {
+        if (ch == '\n') {
+          buf.write(r'\n');
+          continue;
+        }
+        if (ch == '\r') {
+          buf.write(r'\r');
+          continue;
+        }
+        if (ch == '\t') {
+          buf.write(r'\t');
+          continue;
+        }
+      }
+      buf.write(ch);
+    }
+    return buf.toString();
   }
 
   String _extractCardSummary(Map<String, dynamic> content) {

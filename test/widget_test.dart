@@ -1,5 +1,6 @@
 import 'package:btchat/core/chat_theme.dart';
 import 'package:btchat/models/chat_models.dart';
+import 'package:btchat/services/ai_chat_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -48,5 +49,24 @@ void main() {
 
   test('QuickPromptTemplate defaults provide 4 development templates', () {
     expect(QuickPromptTemplate.defaults.length, 4);
+  });
+
+  test('parseWebhookResponse extracts reply cleanly from Power Automate JSON with raw newlines', () {
+    const rawPowerAutomateResponse = '''{
+  "status": "success",
+  "reply": "Saya adalah asisten virtual berbasis AI. Saya dapat membantu Anda dengan:
+
+- **Informasi Bungtemin:** mencari berita dan informasi dari situs bungtemin.net/news.
+- **Pesan:** "Update Aplikasi Tersedia."
+
+Silakan sampaikan apa yang Anda butuhkan, Nunu.",
+  "conversationId": ""
+}''';
+
+    final parsed = AiChatService.parseWebhookResponse(rawPowerAutomateResponse);
+    expect(parsed.reply.startsWith('Saya adalah asisten virtual berbasis AI.'), isTrue);
+    expect(parsed.reply.contains('- **Informasi Bungtemin:**'), isTrue);
+    expect(parsed.reply.endsWith('Nunu.'), isTrue);
+    expect(parsed.reply.contains('"status"'), isFalse);
   });
 }

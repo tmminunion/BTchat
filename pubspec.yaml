@@ -1,7 +1,7 @@
 name: btchat
 description: "BTchat — AI Development Chat Workspace (Gemini AI Studio & Microsoft Copilot Studio) dengan UI modern ala Gemini & Claude."
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

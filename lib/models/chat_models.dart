@@ -248,6 +248,8 @@ class AiProviderConfig {
 
   static const String bundledGeminiApiKey =
       String.fromEnvironment('DEFAULT_GEMINI_API_KEY', defaultValue: '');
+  static const String bundledCopilotWebhookUrl =
+      String.fromEnvironment('DEFAULT_COPILOT_WEBHOOK_URL', defaultValue: '');
 
   const AiProviderConfig({
     this.activeProvider = AiProviderType.geminiStudio,
@@ -260,17 +262,16 @@ class AiProviderConfig {
     this.systemInstruction =
         'Kamu adalah BTchat AI Assistant, asisten AI Software Engineering & Enterprise Automation untuk developer Bungtemin. '
         'Berikan jawaban yang terstruktur, akurat, menggunakan Markdown yang rapi, dan sertakan kode siap pakai dengan best-practice.',
-    this.copilotMode = CopilotConnectionMode.directLineSecret,
+    this.copilotMode = CopilotConnectionMode.customWebhook,
     this.copilotDirectLineSecret =
         const String.fromEnvironment('DEFAULT_COPILOT_SECRET', defaultValue: ''),
     this.copilotTokenEndpoint =
         const String.fromEnvironment('DEFAULT_COPILOT_TOKEN_ENDPOINT', defaultValue: ''),
-    this.copilotWebhookUrl =
-        const String.fromEnvironment('DEFAULT_COPILOT_WEBHOOK_URL', defaultValue: ''),
+    this.copilotWebhookUrl = bundledCopilotWebhookUrl,
     this.copilotWebhookAuthHeader = '',
-    this.copilotBotName = 'Copilot Studio Agent',
+    this.copilotBotName = 'Bungtemin Copilot Agent',
     this.copilotUserId = 'btchat-dev-user',
-    this.copilotUserName = 'Developer',
+    this.copilotUserName = 'Nunu',
   });
 
   static const List<String> geminiModels = [
@@ -411,7 +412,9 @@ class AiProviderConfig {
           (json['copilotDirectLineSecret'] ?? defaults.copilotDirectLineSecret).toString(),
       copilotTokenEndpoint:
           (json['copilotTokenEndpoint'] ?? defaults.copilotTokenEndpoint).toString(),
-      copilotWebhookUrl: (json['copilotWebhookUrl'] ?? defaults.copilotWebhookUrl).toString(),
+      copilotWebhookUrl: ((json['copilotWebhookUrl'] ?? '').toString().trim().isNotEmpty)
+          ? (json['copilotWebhookUrl'] ?? '').toString().trim()
+          : defaults.copilotWebhookUrl,
       copilotWebhookAuthHeader:
           (json['copilotWebhookAuthHeader'] ?? defaults.copilotWebhookAuthHeader).toString(),
       copilotBotName: (json['copilotBotName'] ?? defaults.copilotBotName).toString(),

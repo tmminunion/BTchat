@@ -1,0 +1,35 @@
+name: btchat
+description: "BTchat — AI Development Chat Workspace (Gemini AI Studio & Microsoft Copilot Studio) dengan UI modern ala Gemini & Claude."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  shared_preferences: ^2.3.3
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/img/appicon.png"
+  min_sdk_android: 24
+  adaptive_icon_background: "#0B0D14"
+  adaptive_icon_foreground: "assets/img/appicon.png"
+  adaptive_icon_foreground_inset: 8
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/img/

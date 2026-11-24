@@ -1,0 +1,257 @@
+name: Build BTchat Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-btchat-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build-apk:
+    name: Analyze, Test & Build BTchat Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Flutter (Stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Read Version Metadata
+        id: meta
+        run: |
+          VER_RAW=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          VER_NAME=${VER_RAW%%+*}
+          BASE_CODE=${VER_RAW##*+}
+          VER_CODE=$((BASE_CODE + GITHUB_RUN_NUMBER))
+          echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap Android Project & Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          rm -rf android /tmp/btchat_tpl
+          flutter create /tmp/btchat_tpl --project-name btchat --org com.bung --platforms=android
+          cp -r /tmp/btchat_tpl/android ./android
+          rm -rf /tmp/btchat_tpl
+
+          python3 - <<'PYEOF'
+          import os, re
+
+          # 1. AndroidManifest: INTERNET + label BTchat
+          mpath = "android/app/src/main/AndroidManifest.xml"
+          m = open(mpath, "r", encoding="utf-8").read()
+          if "android.permission.INTERNET" not in m:
+              m = m.replace("<application", '<uses-permission android:name="android.permission.INTERNET"/>\n    <application', 1)
+          m = re.sub(r'android:label="[^"]*"', 'android:label="BTchat"', m)
+          open(mpath, "w", encoding="utf-8").write(m)
+
+          # 2. build.gradle(.kts): minSdk 24 + release signingConfig
+          gpath = "android/app/build.gradle.kts"
+          if not os.path.exists(gpath):
+              gpath = "android/app/build.gradle"
+          g = open(gpath, "r", encoding="utf-8").read()
+          g = g.replace("minSdk = flutter.minSdkVersion", "minSdk = 24")
+          g = g.replace("minSdkVersion flutter.minSdkVersion", "minSdkVersion 24")
+
+          if gpath.endswith(".kts"):
+              g = "import java.util.Properties\nimport java.io.FileInputStream\n" + g
+              signing_block = """
+          signingConfigs {
+              create("release") {
+                  val propsFile = rootProject.file("key.properties")
+                  if (propsFile.exists()) {
+                      val props = Properties()
+                      props.load(FileInputStream(propsFile))
+                      storeFile = file(props.getProperty("storeFile"))
+                      storePassword = props.getProperty("storePassword")
+                      keyAlias = props.getProperty("keyAlias")
+                      keyPassword = props.getProperty("keyPassword")
+                  }
+              }
+          }
+          """
+              g = g.replace("buildTypes {", signing_block + "\n    buildTypes {", 1)
+              g = g.replace("signingConfig = signingConfigs.getByName(\"debug\")", "signingConfig = signingConfigs.getByName(\"release\")")
+          else:
+              signing_block = """
+          signingConfigs {
+              release {
+                  def propsFile = rootProject.file('key.properties')
+                  if (propsFile.exists()) {
+                      def props = new Properties()
+                      props.load(new FileInputStream(propsFile))
+                      storeFile file(props['storeFile'])
+                      storePassword props['storePassword']
+                      keyAlias props['keyAlias']
+                      keyPassword props['keyPassword']
+                  }
+              }
+          }
+          """
+              g = g.replace("buildTypes {", signing_block + "\n    buildTypes {", 1)
+              g = g.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release")
+
+          open(gpath, "w", encoding="utf-8").write(g)
+          PYEOF
+
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/btchat-release.jks
+          cat > android/key.properties <<EOF
+          storePassword=${STORE_PASSWORD}
+          keyPassword=${KEY_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          storeFile=btchat-release.jks
+          EOF
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Generate Launcher Icons
+        run: dart run flutter_launcher_icons
+
+      - name: Static Analysis & Unit Tests
+        run: |
+          flutter analyze --no-fatal-infos
+          flutter test
+
+      - name: Build Signed Release APK
+        env:
+          DEFAULT_GEMINI_API_KEY: ${{ secrets.DEFAULT_GEMINI_API_KEY }}
+          DEFAULT_COPILOT_SECRET: ${{ secrets.DEFAULT_COPILOT_SECRET }}
+          DEFAULT_COPILOT_TOKEN_ENDPOINT: ${{ secrets.DEFAULT_COPILOT_TOKEN_ENDPOINT }}
+          DEFAULT_COPILOT_WEBHOOK_URL: ${{ secrets.DEFAULT_COPILOT_WEBHOOK_URL }}
+        run: |
+          flutter build apk --release --obfuscate --split-debug-info=build/app/outputs/symbols \
+            --build-name=${{ steps.meta.outputs.version_name }} \
+            --build-number=${{ steps.meta.outputs.version_code }} \
+            --dart-define=DEFAULT_GEMINI_API_KEY="${DEFAULT_GEMINI_API_KEY}" \
+            --dart-define=DEFAULT_COPILOT_SECRET="${DEFAULT_COPILOT_SECRET}" \
+            --dart-define=DEFAULT_COPILOT_TOKEN_ENDPOINT="${DEFAULT_COPILOT_TOKEN_ENDPOINT}" \
+            --dart-define=DEFAULT_COPILOT_WEBHOOK_URL="${DEFAULT_COPILOT_WEBHOOK_URL}"
+          cp build/app/outputs/flutter-apk/app-release.apk "BTchat-v${{ steps.meta.outputs.version_name }}-code${{ steps.meta.outputs.version_code }}-release.apk"
+
+      - name: Upload APK to Google Drive (NUDB)
+        env:
+          GDRIVE_API_KEY: ${{ secrets.GDRIVE_API_KEY }}
+          GDRIVE_APK_FOLDER_ID: ${{ secrets.GDRIVE_APK_FOLDER_ID }}
+          APK_FILE: "BTchat-v${{ steps.meta.outputs.version_name }}-code${{ steps.meta.outputs.version_code }}-release.apk"
+          VER_NAME: ${{ steps.meta.outputs.version_name }}
+          VER_CODE: ${{ steps.meta.outputs.version_code }}
+        run: |
+          if [ -z "$GDRIVE_API_KEY" ]; then
+            echo "GDRIVE_API_KEY tidak diset; melewati upload Google Drive."
+            exit 0
+          fi
+          if [ ! -f "$APK_FILE" ]; then
+            echo "File APK tidak ditemukan."
+            exit 1
+          fi
+
+          CURL_ARGS=(
+            -sS -w "\n%{http_code}" -X POST
+            "https://nudb.bungtemin.net/api/gdrive/upload"
+            -H "x-gdrive-key: ${GDRIVE_API_KEY}"
+            -F "file=@${APK_FILE}"
+            -F "name=${APK_FILE}"
+            -F "description=BTchat v${VER_NAME} (build ${VER_CODE})"
+          )
+          if [ -n "$GDRIVE_APK_FOLDER_ID" ]; then
+            CURL_ARGS+=(-F "folderId=${GDRIVE_APK_FOLDER_ID}")
+          fi
+
+          RESP=$(curl "${CURL_ARGS[@]}")
+          HTTP_CODE=$(printf "%s" "$RESP" | tail -n1)
+          BODY=$(printf "%s" "$RESP" | sed '$d')
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            GDRIVE_URL=$(printf "%s" "$BODY" | python3 -c 'import sys, json; d=json.load(sys.stdin); it=d.get("item") or {}; fid=it.get("id") or ""; print("https://drive.google.com/file/d/" + str(fid) + "/view" if fid else "")')
+            if [ -n "$GDRIVE_URL" ]; then
+              echo "::add-mask::${GDRIVE_URL}"
+              echo "GDRIVE_URL=${GDRIVE_URL}" >> "$GITHUB_ENV"
+              echo "Upload APK ke Google Drive (NUDB) berhasil."
+            else
+              echo "Upload selesai, tetapi URL tidak ditemukan di respons."
+            fi
+          else
+            echo "Upload APK ke Google Drive gagal (HTTP ${HTTP_CODE})."
+          fi
+
+      - name: Send APK & Download Link to Telegram
+        if: always()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APK_FILE: "BTchat-v${{ steps.meta.outputs.version_name }}-code${{ steps.meta.outputs.version_code }}-release.apk"
+          VER_NAME: ${{ steps.meta.outputs.version_name }}
+          VER_CODE: ${{ steps.meta.outputs.version_code }}
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "Secret Telegram belum diset; melewati notifikasi."
+            exit 0
+          fi
+
+          if [ -f "$APK_FILE" ]; then
+            SIZE_BYTES=$(wc -c < "$APK_FILE")
+            SIZE_MB=$(awk "BEGIN {printf \"%.2f\", ${SIZE_BYTES}/1048576}")
+
+            if [ -n "${GDRIVE_URL:-}" ]; then
+              CAPTION=$(printf "🚀 BTchat v%s (code %s) berhasil dibuild!\n🤖 Engine: Gemini AI Studio & Microsoft Copilot Studio\n🎨 UI: Gemini & Claude Mode\n📦 File: %s (%s MB)\n📥 Google Drive: %s" "${VER_NAME}" "${VER_CODE}" "${APK_FILE}" "${SIZE_MB}" "${GDRIVE_URL}")
+            else
+              CAPTION=$(printf "🚀 BTchat v%s (code %s) berhasil dibuild!\n🤖 Engine: Gemini AI Studio & Microsoft Copilot Studio\n🎨 UI: Gemini & Claude Mode\n📦 File: %s (%s MB)" "${VER_NAME}" "${VER_CODE}" "${APK_FILE}" "${SIZE_MB}")
+            fi
+
+            # Jika ukuran APK < 49 MB, kirim langsung file APK via sendDocument ke Telegram
+            if [ "$SIZE_BYTES" -lt 51380224 ]; then
+              DOC_HTTP=$(curl -sS -o /tmp/tg_doc.json -w "%{http_code}" -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+                -F "chat_id=${CHAT_ID}" \
+                -F "document=@${APK_FILE}" \
+                -F "caption=${CAPTION}" || echo "000")
+              if [ "$DOC_HTTP" = "200" ]; then
+                echo "APK berhasil dikirim langsung ke Telegram via sendDocument."
+                exit 0
+              fi
+            fi
+
+            # Fallback kirim pesan teks + link Google Drive
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${CHAT_ID}" \
+              --data-urlencode "text=${CAPTION}" \
+              --data-urlencode "disable_web_page_preview=true" > /dev/null
+          else
+            MSG="❌ Build BTchat v${VER_NAME} (code ${VER_CODE}) gagal menghasilkan file APK."
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${CHAT_ID}" \
+              --data-urlencode "text=${MSG}" > /dev/null
+          fi
+
+      - name: Cleanup Temporary Files & Workflow Artifacts
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf build android /tmp/btchat_tpl *.apk
+          ARTIFACT_IDS=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[].id' 2>/dev/null || true)
+          for AID in $ARTIFACT_IDS; do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/${AID}" >/dev/null 2>&1 || true
+          done
